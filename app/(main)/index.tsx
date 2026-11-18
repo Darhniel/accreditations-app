@@ -3,6 +3,8 @@ import { View, Text, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, 
 import { api } from '@/services/api';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
+import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
   const [events, setEvents] = useState<any[]>([]);
@@ -10,6 +12,7 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const { signOut } = useAuth();
+  const insets = useSafeAreaInsets();
 
   const router = useRouter();
 
@@ -49,11 +52,14 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>My Events</Text>
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
+      <StatusBar style="dark" />
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        <View style={styles.headerInner}>
+          <Text style={styles.headerTitle} numberOfLines={1}>My Events</Text>
+          <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
+            <Text style={styles.logoutText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -67,7 +73,7 @@ export default function HomeScreen() {
         <FlatList
           data={events}
           keyExtractor={(item) => item.id.toString()}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 16 }]}
           refreshing={refreshing}
           onRefresh={onRefresh}
           renderItem={({ item }) => (
@@ -89,16 +95,21 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F3F4F6' },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 24,
-    paddingTop: 60,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     backgroundColor: '#FFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB'
   },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#111827' },
+  headerInner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center'
+  },
+  headerTitle: { flexShrink: 1, marginRight: 12, fontSize: 24, fontWeight: 'bold', color: '#111827' },
   logoutBtn: { padding: 8 },
   logoutText: { color: '#E55353', fontWeight: '600', fontSize: 16 },
   listContent: { padding: 16 },
@@ -109,6 +120,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#E5E7EB',
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 4,
@@ -118,7 +132,7 @@ const styles = StyleSheet.create({
   eventName: { fontSize: 18, fontWeight: 'bold', color: '#111827', marginBottom: 8 },
   eventDate: { fontSize: 14, color: '#6B7280', marginBottom: 4 },
   eventLocation: { fontSize: 14, color: '#6B7280' },
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  emptyText: { fontSize: 18, fontWeight: '600', color: '#6B7280', marginBottom: 8 },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, width: '100%', maxWidth: 720, alignSelf: 'center' },
+  emptyText: { fontSize: 18, fontWeight: '600', color: '#6B7280', marginBottom: 8, textAlign: 'center' },
   emptySubtext: { fontSize: 14, color: '#9CA3AF', textAlign: 'center' },
 });

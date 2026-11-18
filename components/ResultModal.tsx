@@ -70,16 +70,11 @@ export default function ResultModal({ success, message, guest, onClose }: Result
 
         {isSuccess && guest && (
           <View style={styles.details}>
-            <Text style={styles.guestName}>{guest.adult_names}</Text>
+            <Text style={styles.guestName}>{guest.names ?? guest.adult_names}</Text>
             <View style={styles.badgeRow}>
               <View style={[styles.badge, { backgroundColor: guest.category_color || '#6B7280' }]}>
                 <Text style={styles.badgeText}>{guest.category_name || 'Regular'}</Text>
               </View>
-              {guest.kids_count > 0 && (
-                <Text style={styles.kidsText}>
-                  {guest.kids_count} kid{guest.kids_count !== 1 ? 's' : ''}
-                </Text>
-              )}
             </View>
           </View>
         )}
@@ -99,7 +94,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', padding: 24, zIndex: 1000,
   },
   card: {
-    backgroundColor: '#FFF', width: '100%', padding: 28, borderRadius: 20,
+    backgroundColor: '#FFF', width: '100%', maxWidth: 420, padding: 28, borderRadius: 20,
     alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15,
     shadowRadius: 24, shadowOffset: { width: 0, height: 8 }, elevation: 8,
   },
@@ -124,7 +119,6 @@ const styles = StyleSheet.create({
   badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999 },
   badgeText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
-  kidsText: { fontSize: 14, color: '#6B7280', fontWeight: '500' },
   doneBtn: {
     backgroundColor: '#111827', paddingVertical: 16, paddingHorizontal: 48,
     borderRadius: 999, width: '100%', alignItems: 'center',

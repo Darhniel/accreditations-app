@@ -25,10 +25,11 @@ export interface Event {
 
 export interface GuestSummary {
   id: number;
-  adult_names: string;
+  names: string;
+  /** @deprecated pre-rename field; the API still sends it for now. */
+  adult_names?: string;
   category_name: string;
   category_color: string;
-  kids_count: number;
   is_checked_in_today: boolean;
   ticket_number: string;
 }
@@ -41,6 +42,5 @@ export interface ActivityLog {
   location_name: string | null;
   date: string;
   time: string;
-  kids_count: number;
   is_accredited: boolean;
 }

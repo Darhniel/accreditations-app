@@ -1,8 +1,10 @@
 import * as SQLite from 'expo-sqlite';
 import { GuestSummary } from '@/types';
+import { getCurrentUserId } from './current-user';
 
 const DB_NAME = 'guest_accreditation.db';
 let dbInstance: SQLite.SQLiteDatabase | null = null;
+let initPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 // ==========================================
 // DATABASE INITIALIZATION
@@ -11,22 +13,63 @@ let dbInstance: SQLite.SQLiteDatabase | null = null;
 export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
     if (dbInstance) return dbInstance;
 
-    dbInstance = await SQLite.openDatabaseAsync(DB_NAME);
+    // Share ONE pending initialization across all concurrent callers.
+    // Opening the same DB twice at once (which the event screen does when
+    // its init effect and first focus collide) crashes the Android native
+    // module with a NullPointerException inside prepareAsync.
+    if (!initPromise) {
+        initPromise = openAndMigrate().catch((error) => {
+            initPromise = null; // allow a fresh attempt on the next call
+            throw error;
+        });
+    }
+    return initPromise;
+};
 
-    // Drop the old table to apply the new composite Primary Key schema
-    await dbInstance.execAsync(`DROP TABLE IF EXISTS local_guests;`);
+const openAndMigrate = async (): Promise<SQLite.SQLiteDatabase> => {
+    const db = await SQLite.openDatabaseAsync(DB_NAME);
+    dbInstance = db;
 
-    await dbInstance.execAsync(`
+    // Versioned migrations, tracked with the database's user_version pragma so
+    // each step runs exactly once per device instead of on every launch.
+    //
+    // v2: rebuild the guest cache after the API's adult_names -> names rename
+    //     and the composite-PK change (the cache is disposable).
+    // v3: add `user_id` to the offline queue so queued scans belong to the
+    //     ambassador who made them and are only replayed under that account.
+    const schema = await db.getFirstAsync<{ user_version: number }>(
+        'PRAGMA user_version;'
+    );
+    const version = schema?.user_version ?? 0;
+
+    if (version > 0 && version < 2) {
+        await db.execAsync(`DROP TABLE IF EXISTS local_guests;`);
+    }
+
+    if (version > 0 && version < 3) {
+        // `ADD COLUMN` has no IF NOT EXISTS in SQLite, so guard against a
+        // partially-applied migration.
+        const columns = await db.getAllAsync<{ name: string }>(
+            'PRAGMA table_info(pending_checkins);'
+        );
+        if (!columns.some((column) => column.name === 'user_id')) {
+            await db.execAsync(
+                `ALTER TABLE pending_checkins ADD COLUMN user_id INTEGER;`
+            );
+        }
+    }
+
+    await db.execAsync(`
     PRAGMA journal_mode = WAL;
-    
+    PRAGMA user_version = 3;
+
     CREATE TABLE IF NOT EXISTS local_guests (
       event_id INTEGER NOT NULL,
       id INTEGER NOT NULL,
-      adult_names TEXT NOT NULL,
+      names TEXT NOT NULL,
       ticket_number TEXT NOT NULL,
       category_name TEXT,
       category_color TEXT,
-      kids_count INTEGER DEFAULT 0,
       is_checked_in INTEGER DEFAULT 0,
       last_synced INTEGER,
       PRIMARY KEY (event_id, id)
@@ -37,6 +80,7 @@ export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
       guest_identifier TEXT NOT NULL,
       event_id INTEGER NOT NULL,
       location_id INTEGER,
+      user_id INTEGER,
       timestamp INTEGER NOT NULL,
       sync_status TEXT DEFAULT 'pending',
       server_message TEXT
@@ -44,17 +88,17 @@ export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
     
     CREATE INDEX IF NOT EXISTS idx_guests_event ON local_guests(event_id);
     CREATE INDEX IF NOT EXISTS idx_guests_ticket ON local_guests(ticket_number);
-    CREATE INDEX IF NOT EXISTS idx_guests_names ON local_guests(adult_names);
+    CREATE INDEX IF NOT EXISTS idx_guests_names ON local_guests(names);
     CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_checkins(sync_status);
+    CREATE INDEX IF NOT EXISTS idx_pending_user ON pending_checkins(user_id, sync_status);
   `);
 
     return dbInstance;
 };
 
-const getDb = async () => {
-    if (!dbInstance) return initDatabase();
-    return dbInstance;
-};
+// Every operation goes through the shared, promise-memoized initializer —
+// at most one openDatabaseAsync exists per app session.
+const getDb = (): Promise<SQLite.SQLiteDatabase> => initDatabase();
 
 // ==========================================
 // GUEST CACHE OPERATIONS
@@ -92,16 +136,17 @@ export const cacheGuestList = async (eventId: number, guestsResponse: any): Prom
             await db.runAsync(
                 // ✅ Changed to INSERT OR REPLACE to prevent UNIQUE constraint crashes
                 `INSERT OR REPLACE INTO local_guests 
-           (id, event_id, adult_names, ticket_number, category_name, category_color, kids_count, is_checked_in, last_synced)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, event_id, names, ticket_number, category_name, category_color, is_checked_in, last_synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     guest.id,
                     eventId,
-                    guest.adult_names || 'Unknown Guest', // ✅ Safe fallback
+                    // `adult_names` is the pre-rename field; accept it from an
+                    // older API for one release so the cache never blanks out.
+                    guest.names || guest.adult_names || 'Unknown Guest',
                     guest.ticket_number || 'UNKNOWN',     // ✅ Safe fallback
                     guest.category_name || null,
                     guest.category_color || null,
-                    guest.kids_count ?? 0,                // ✅ Nullish coalescing for 0 values
                     guest.is_checked_in_today ? 1 : 0,
                     now,
                 ]
@@ -110,16 +155,23 @@ export const cacheGuestList = async (eventId: number, guestsResponse: any): Prom
     });
 };
 
-export const searchLocalGuests = async (eventId: number, query: string): Promise<any[]> => {
+export const searchLocalGuests = async (eventId: number, query: string): Promise<GuestSummary[]> => {
     const db = await getDb();
     const results = await db.getAllAsync(
         `SELECT * FROM local_guests 
-     WHERE event_id = ? AND adult_names LIKE ?
-     ORDER BY adult_names ASC
+     WHERE event_id = ? AND names LIKE ?
+     ORDER BY names ASC
      LIMIT 10`,
         eventId, `%${query}%`
     );
-    return results;
+
+    // Cached rows store check-in status as `is_checked_in` (0/1), while the
+    // UI reads `is_checked_in_today` from server results — normalize here so
+    // offline guests show the checked-in badge and can't be re-queued.
+    return results.map((row: any) => ({
+        ...row,
+        is_checked_in_today: Boolean(row.is_checked_in),
+    }));
 };
 
 export const findLocalGuestByTicket = async (ticketNumber: string): Promise<any | null> => {
@@ -158,32 +210,63 @@ export const queueCheckIn = async (
     locationId: number | null
 ): Promise<void> => {
     const db = await getDb();
+    const userId = await getCurrentUserId();
+
     await db.runAsync(
-        `INSERT INTO pending_checkins (guest_identifier, event_id, location_id, timestamp, sync_status)
-     VALUES (?, ?, ?, ?, 'pending')`,
+        `INSERT INTO pending_checkins (guest_identifier, event_id, location_id, user_id, timestamp, sync_status)
+     VALUES (?, ?, ?, ?, ?, 'pending')`,
         guestIdentifier,
         eventId,
         locationId,
+        userId,
         Date.now()
     );
 };
 
+// Rows queued before v3 have no owner. Attach them to the first account that
+// uses the queue after the upgrade so those scans are not silently dropped.
+// This runs at most once per legacy row.
+const claimLegacyQueueForUser = async (userId: number): Promise<void> => {
+    const db = await getDb();
+    await db.runAsync(
+        'UPDATE pending_checkins SET user_id = ? WHERE user_id IS NULL',
+        userId
+    );
+};
+
+const getScopedUserId = async (): Promise<number | null> => {
+    const userId = await getCurrentUserId();
+    if (userId !== null) {
+        await claimLegacyQueueForUser(userId);
+    }
+    return userId;
+};
+
 export const getPendingCheckIns = async (): Promise<any[]> => {
+    const userId = await getScopedUserId();
+    if (userId === null) return [];
+
     const db = await getDb();
     return db.getAllAsync(
-        "SELECT * FROM pending_checkins WHERE sync_status = 'pending' ORDER BY timestamp ASC"
+        "SELECT * FROM pending_checkins WHERE sync_status = 'pending' AND user_id = ? ORDER BY timestamp ASC",
+        userId
     );
 };
 
 export const getPendingCount = async (eventId?: number): Promise<number> => {
+    const userId = await getScopedUserId();
+    if (userId === null) return 0;
+
     const db = await getDb();
     const result = eventId
         ? await db.getFirstAsync(
-            "SELECT COUNT(*) as count FROM pending_checkins WHERE sync_status = 'pending' AND event_id = ?",
+            "SELECT COUNT(*) as count FROM pending_checkins WHERE sync_status = 'pending' AND user_id = ? AND event_id = ?",
+            userId,
             eventId
         )
         : await db.getFirstAsync(
-            "SELECT COUNT(*) as count FROM pending_checkins WHERE sync_status = 'pending'"
+            "SELECT COUNT(*) as count FROM pending_checkins WHERE sync_status = 'pending' AND user_id = ?",
+            userId
         );
     return (result as any)?.count || 0;
 };
@@ -206,13 +289,23 @@ export const markCheckInConflict = async (id: number, serverMessage: string): Pr
 };
 
 export const getRecentConflicts = async (): Promise<any[]> => {
+    const userId = await getScopedUserId();
+    if (userId === null) return [];
+
     const db = await getDb();
     return db.getAllAsync(
-        "SELECT * FROM pending_checkins WHERE sync_status = 'conflict' ORDER BY timestamp DESC LIMIT 10"
+        "SELECT * FROM pending_checkins WHERE sync_status = 'conflict' AND user_id = ? ORDER BY timestamp DESC LIMIT 10",
+        userId
     );
 };
 
 export const clearConflicts = async (): Promise<void> => {
+    const userId = await getScopedUserId();
+    if (userId === null) return;
+
     const db = await getDb();
-    await db.runAsync("DELETE FROM pending_checkins WHERE sync_status = 'conflict'");
+    await db.runAsync(
+        "DELETE FROM pending_checkins WHERE sync_status = 'conflict' AND user_id = ?",
+        userId
+    );
 };

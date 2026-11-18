@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Animated, Easing } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { GuestSummary } from '@/types';
 
@@ -58,6 +59,7 @@ export default function ResultScreen() {
 
     return (
         <Pressable style={styles.overlay} onPress={handleDone}>
+            <StatusBar style="light" />
             <Animated.View style={[
                 styles.card,
                 getCardStyle(),
@@ -76,14 +78,11 @@ export default function ResultScreen() {
 
                 {isSuccess && guestData && (
                     <View style={styles.details}>
-                        <Text style={styles.guestName}>{guestData.adult_names}</Text>
+                        <Text style={styles.guestName}>{guestData.names ?? guestData.adult_names}</Text>
                         <View style={styles.badgeRow}>
                             <View style={[styles.badge, { backgroundColor: guestData.category_color || '#6B7280' }]}>
                                 <Text style={styles.badgeText}>{guestData.category_name || 'Regular'}</Text>
                             </View>
-                            {guestData.kids_count > 0 && (
-                                <Text style={styles.kidsText}>{guestData.kids_count} kid{guestData.kids_count !== 1 ? 's' : ''}</Text>
-                            )}
                         </View>
                     </View>
                 )}
@@ -98,7 +97,7 @@ export default function ResultScreen() {
 
 const styles = StyleSheet.create({
     overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-    card: { backgroundColor: '#FFF', width: '100%', padding: 28, borderRadius: 20, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 24, shadowOffset: { width: 0, height: 8 }, elevation: 8 },
+    card: { backgroundColor: '#FFF', width: '100%', maxWidth: 420, padding: 28, borderRadius: 20, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 24, shadowOffset: { width: 0, height: 8 }, elevation: 8 },
     cardSuccess: { borderTopWidth: 4, borderTopColor: '#22C55E' },
     cardError: { borderTopWidth: 4, borderTopColor: '#EF4444' },
     cardQueued: { borderTopWidth: 4, borderTopColor: '#F59E0B' },
@@ -111,7 +110,6 @@ const styles = StyleSheet.create({
     badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     badge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999 },
     badgeText: { color: '#FFF', fontSize: 13, fontWeight: '600' },
-    kidsText: { fontSize: 14, color: '#6B7280', fontWeight: '500' },
     doneBtn: { backgroundColor: '#111827', paddingVertical: 16, paddingHorizontal: 48, borderRadius: 999, width: '100%', alignItems: 'center' },
     doneText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
 });

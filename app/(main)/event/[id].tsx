@@ -1,30 +1,27 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, Alert, Animated, Easing, RefreshControl } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, Alert, Animated, Easing, RefreshControl, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { searchGuests, checkInGuest, getActivityLog, api } from '@/services/api';
 import { GuestSummary, ActivityLog, Location } from '@/types';
 import NetInfo from '@react-native-community/netinfo';
 import {
-    initDatabase,
     cacheGuestList,
     searchLocalGuests,
     queueCheckIn,
-    getPendingCount,
-    getEventLastSynced
+    getPendingCount
 } from '@/services/database';
-import {
-    triggerSync,
-    subscribeToSync,
-    SyncEvent,
-    getIsSyncing
-} from '@/services/sync';
+import { subscribeToSync, SyncEvent } from '@/services/sync';
 import ResultModal from '../../../components/ResultModal';
+import { StatusBar } from 'expo-status-bar';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@react-native-vector-icons/ionicons';
 
 export default function CheckInScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const eventId = parseInt(id);
     const router = useRouter();
+    const insets = useSafeAreaInsets();
 
     const [isOnline, setIsOnline] = useState(true);
     const [locations, setLocations] = useState<Location[]>([]);
@@ -130,22 +127,10 @@ export default function CheckInScreen() {
         };
     }, [autoResult]);
 
-    useEffect(() => {
-        initDatabase();
-    }, [])
-
     useFocusEffect(
         useCallback(() => {
             loadEventData();
             updatePendingCount();
-            // Trigger sync if there are pending items and we're online
-            if (isOnline) {
-                getPendingCount(eventId).then((count) => {
-                    if (count > 0 && !getIsSyncing()) {
-                        triggerSync();
-                    }
-                });
-            }
         }, [eventId, isOnline])
     );
 
@@ -172,14 +157,12 @@ export default function CheckInScreen() {
     // ==========================================
     // NETWORK LISTENER
     // ==========================================
-    
+
+    // Connectivity-driven sync lives in useSyncManager (main layout) so it
+    // also runs after login and on app foreground, not only on this screen.
     useEffect(() => {
         const unsubscribe = NetInfo.addEventListener((state) => {
-            const connected = state.isConnected ?? false;
-            setIsOnline(connected);
-            if (connected) {
-                triggerSync();
-            }
+            setIsOnline(state.isConnected ?? false);
         });
         return () => unsubscribe();
     }, []);
@@ -190,7 +173,10 @@ export default function CheckInScreen() {
     };
 
     const loadEventData = async () => {
-        // if (isOnline) return;
+        // Offline: everything the screen needs (locations are remembered from
+        // the last online visit, guest search falls back to the SQLite cache,
+        // activity log keeps its last fetch) — skip the failing network calls.
+        if (!isOnline) return;
 
         try {
             const event = await api(`/events/${eventId}/`);
@@ -199,16 +185,19 @@ export default function CheckInScreen() {
                 setSelectedLocation(event.locations[0]);
             }
 
-            // Fetch and cache guest list
-            const guests = await api(`/events/${eventId}/guests/`);
-            // console.log('Guests response:', guests)
-            await cacheGuestList(eventId, guests);
+            // Guest cache is best-effort: a SQLite hiccup here must not fail
+            // the screen — the backend load itself already succeeded.
+            try {
+                const guests = await api(`/events/${eventId}/guests/`);
+                await cacheGuestList(eventId, guests);
+            } catch (cacheError) {
+                console.warn('Guest cache update failed:', cacheError);
+            }
 
             await fetchActivityLog();
         } catch (e) {
             console.error('Failed to load event data', e);
             Alert.alert('Error', 'Failed to load event data. Please check your connection.');
-            throw e; // Re-throw so handleRefresh knows it failed
         }
     };
 
@@ -356,22 +345,25 @@ export default function CheckInScreen() {
 
     return (
         <View style={styles.container}>
+            <StatusBar style="dark" />
             {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Text style={styles.backText}>← Back</Text>
-                </TouchableOpacity>
-                <View style={styles.headerRight}>
-                    {pendingCount > 0 && (
-                        <View style={styles.pendingBadge}>
-                            <Text style={styles.pendingText}>{pendingCount}</Text>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+                <View style={styles.headerInner}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                        <Text style={styles.backText}>← Back</Text>
+                    </TouchableOpacity>
+                    <View style={styles.headerRight}>
+                        {pendingCount > 0 && (
+                            <View style={styles.pendingBadge}>
+                                <Text style={styles.pendingText}>{pendingCount}</Text>
+                            </View>
+                        )}
+                        <View style={[styles.statusPill, { backgroundColor: isOnline ? '#F0FDF4' : '#FEF2F2' }]}>
+                            <View style={[styles.statusDot, { backgroundColor: isOnline ? '#22C55E' : '#EF4444' }]} />
+                            <Text style={[styles.statusText, { color: isOnline ? '#15803D' : '#B91C1C' }]}>
+                                {isOnline ? 'Online' : 'Offline'}
+                            </Text>
                         </View>
-                    )}
-                    <View style={[styles.statusPill, { backgroundColor: isOnline ? '#F0FDF4' : '#FEF2F2' }]}>
-                        <View style={[styles.statusDot, { backgroundColor: isOnline ? '#22C55E' : '#EF4444' }]} />
-                        <Text style={[styles.statusText, { color: isOnline ? '#15803D' : '#B91C1C' }]}>
-                            {isOnline ? 'Online' : 'Offline'}
-                        </Text>
                     </View>
                 </View>
             </View>
@@ -388,6 +380,9 @@ export default function CheckInScreen() {
             <FlatList
                 data={activityLog}
                 keyExtractor={(item) => item.id.toString()}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                ListHeaderComponentStyle={styles.listHeader}
 
                 refreshControl={
                     <RefreshControl
@@ -395,6 +390,7 @@ export default function CheckInScreen() {
                         onRefresh={handleRefresh}
                         enabled={isOnline}
                         tintColor="#111827"
+                        colors={['#111827']}
                     />
                 }
                 ListHeaderComponent={
@@ -432,7 +428,31 @@ export default function CheckInScreen() {
 
                         {/* Manual Search */}
                         <View style={styles.searchContainer}>
-                            <TextInput
+                            <View style={styles.searchBox}>
+                                <TextInput
+                                    style={styles.searchInput}
+                                    placeholder={isOnline ? "Scan QR or type guest name..." : "Search cached guests..."}
+                                    value={searchQuery}
+                                    onChangeText={setSearchQuery}
+                                    autoCapitalize="words"
+                                    returnKeyType="search"
+                                    onSubmitEditing={() => searchQuery.trim().length >= 3 && handleCheckIn(searchQuery)}
+                                />
+                                <TouchableOpacity
+                                    style={styles.searchIcon}
+                                    onPress={() => searchQuery.trim().length >= 3 && handleCheckIn(searchQuery)}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={'Search'}
+                                >
+                                    <Ionicons
+                                        name={'search'}
+                                        size={22}
+                                        color="#6B7280"
+                                    />
+                                </TouchableOpacity>
+                            </View>
+                            {/* <TextInput
                                 style={styles.searchInput}
                                 placeholder={isOnline ? "Scan QR or type guest name..." : "Search cached guests..."}
                                 value={searchQuery}
@@ -440,7 +460,7 @@ export default function CheckInScreen() {
                                 autoCapitalize="words"
                                 returnKeyType="search"
                                 onSubmitEditing={() => searchQuery.trim().length >= 3 && handleCheckIn(searchQuery)}
-                            />
+                            /> */}
                             {isSearching && <ActivityIndicator style={styles.searchSpinner} color="#111827" />}
 
                             {/* Search Dropdown */}
@@ -454,10 +474,7 @@ export default function CheckInScreen() {
                                             disabled={guest.is_checked_in_today}
                                         >
                                             <View style={styles.dropdownLeft}>
-                                                <Text style={styles.dropdownName}>{guest.adult_names}</Text>
-                                                {guest.kids_count > 0 && (
-                                                    <Text style={styles.dropdownKids}>{guest.kids_count} kid{guest.kids_count !== 1 ? 's' : ''}</Text>
-                                                )}
+                                                <Text style={styles.dropdownName}>{guest.names ?? guest.adult_names}</Text>
                                             </View>
                                             <View style={[styles.dropdownDot, { backgroundColor: guest.category_color || '#6B7280' }]} />
                                             {guest.is_checked_in_today && <Text style={styles.checkedInBadge}>✓ Checked In</Text>}
@@ -485,7 +502,7 @@ export default function CheckInScreen() {
                     </View>
                 }
                 renderItem={({ item }) => (
-                    <View style={{ paddingHorizontal: 16 }}>
+                    <View style={styles.activityRow}>
                         <View style={styles.activityItem}>
                             <View style={[styles.activityDot, { backgroundColor: item.is_accredited ? '#22C55E' : '#EF4444' }]} />
                             <View style={styles.activityInfo}>
@@ -500,7 +517,7 @@ export default function CheckInScreen() {
                 ListEmptyComponent={
                     <Text style={styles.emptyText}>No check-ins yet for today.</Text>
                 }
-                contentContainerStyle={{ paddingBottom: 40 }}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
             />
 
             {autoResult && (
@@ -518,7 +535,8 @@ export default function CheckInScreen() {
 // Emil Kowalski inspired styles
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F3F4F6' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 60, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+    header: { paddingHorizontal: 16, paddingBottom: 12, backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+    headerInner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: 720, alignSelf: 'center' },
     backBtn: { padding: 8 },
     backText: { fontSize: 16, color: '#111827', fontWeight: '600' },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -536,7 +554,10 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1, borderBottomColor: '#BFDBFE',
     },
     syncText: { color: '#1D4ED8', fontSize: 13, fontWeight: '600' },
-    controls: { padding: 16 },
+    // Keep the search dropdown above the rows on iOS, where paint order follows
+    // sibling order instead of Android's elevation.
+    listHeader: { zIndex: 10 },
+    controls: { padding: 16, width: '100%', maxWidth: 720, alignSelf: 'center', zIndex: 10 },
     offlineBanner: { backgroundColor: '#FEF3C7', padding: 12, borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#FDE68A' },
     offlineBannerText: { color: '#92400E', fontSize: 13, fontWeight: '600', textAlign: 'center' },
     locationPicker: { marginBottom: 16 },
@@ -545,19 +566,23 @@ const styles = StyleSheet.create({
     locationChipActive: { backgroundColor: '#111827', borderColor: '#111827' },
     locationChipText: { fontSize: 14, color: '#6B7280', fontWeight: '500' },
     locationChipTextActive: { color: '#FFF', fontWeight: '600' },
-    searchContainer: { position: 'relative', marginBottom: 16 },
-    searchInput: { backgroundColor: '#FFF', paddingVertical: 16, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', fontSize: 16, color: '#111827' },
+    // zIndex on the container too: iOS paints siblings in order, so without it
+    // the "Open QR Scanner" button below would sit on top of the dropdown.
+    searchContainer: { position: 'relative', marginBottom: 16, zIndex: 10 },
+    searchBox: {flexDirection: "row", alignItems: "center", },
+    searchInput: { backgroundColor: '#FFF', paddingVertical: 16, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', fontSize: 16, color: '#111827', flex: 1 },
+    searchIcon: { padding: 12, justifyContent: "center", alignItems: "center"},
     searchSpinner: { position: 'absolute', right: 16, top: 18 },
     dropdown: { position: 'absolute', top: 56, left: 0, right: 0, backgroundColor: '#FFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', zIndex: 10, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
     dropdownItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
     dropdownLeft: { flex: 1 },
     dropdownName: { fontSize: 15, fontWeight: '600', color: '#111827' },
-    dropdownKids: { fontSize: 12, color: '#6B7280', marginTop: 2 },
     dropdownDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
     checkedInBadge: { fontSize: 12, color: '#22C55E', fontWeight: '600' },
     scanButton: { backgroundColor: '#111827', paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginBottom: 24 },
     scanButtonText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
     sectionTitle: { fontSize: 15, fontWeight: '600', color: '#6B7280', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
+    activityRow: { paddingHorizontal: 16, width: '100%', maxWidth: 720, alignSelf: 'center' },
     activityItem: { flexDirection: 'row', backgroundColor: '#FFF', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', marginBottom: 8 },
     activityDot: { width: 10, height: 10, borderRadius: 5, marginRight: 16, marginTop: 4 },
     activityInfo: { flex: 1 },

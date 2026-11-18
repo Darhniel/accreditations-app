@@ -7,8 +7,7 @@ import {
     findLocalGuestByTicket,
     getPendingCount,
 } from './database';
-
-const API_BASE_URL = 'http://192.168.43.198:8000/api'; // ⚠️ Update with your IP
+import { API_BASE_URL, refreshTokens } from './api';
 
 // ==========================================
 // EVENT TYPES
@@ -64,23 +63,51 @@ const notifyPendingCount = async () => {
 // SYNC LOGIC
 // ==========================================
 
+// These responses mean "try again later", not "this scan is invalid".
+// 403 is included deliberately: the backend returns it for outside-hours
+// check-ins (and other temporary permission states), and discarding a queued
+// scan that arrived at the venue would lose a real check-in.
+const TRANSIENT_STATUSES = new Set([403, 408, 425, 429]);
+
+const isTransientStatus = (status: number): boolean =>
+    TRANSIENT_STATUSES.has(status) || status >= 500;
+
 export const syncPendingCheckIns = async (): Promise<void> => {
     if (isSyncing) return;
 
-    const pending = await getPendingCheckIns();
-    if (pending.length === 0) return;
-
+    // Claim the flag before the first await: mount + reconnect (or any two
+    // triggers in the same tick) must not start two batches at once.
     isSyncing = true;
-    const total = pending.length;
 
-    emit({ type: 'sync_start', total });
+    let started = false;
 
     try {
-        const token = await SecureStore.getItemAsync('access_token');
-        if (!token) {
-            isSyncing = false;
-            return;
-        }
+        // The queue is already filtered to the signed-in user; it returns an
+        // empty list when nobody is signed in, so scans are never replayed
+        // under another ambassador's token.
+        const pending = await getPendingCheckIns();
+        if (pending.length === 0) return;
+
+        let token = await SecureStore.getItemAsync('access_token');
+        if (!token) return;
+
+        started = true;
+        const total = pending.length;
+
+        emit({ type: 'sync_start', total });
+
+        const postCheckIn = (item: any) =>
+            fetch(`${API_BASE_URL}/events/${item.event_id}/check-in/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    identifier: item.guest_identifier,
+                    location_id: item.location_id,
+                }),
+            });
 
         for (let i = 0; i < pending.length; i++) {
             const item = pending[i] as any;
@@ -93,17 +120,31 @@ export const syncPendingCheckIns = async (): Promise<void> => {
             });
 
             try {
-                const response = await fetch(`${API_BASE_URL}/events/${item.event_id}/check-in/`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`,
-                    },
-                    body: JSON.stringify({
-                        identifier: item.guest_identifier,
-                        location_id: item.location_id,
-                    }),
-                });
+                let response = await postCheckIn(item);
+
+                if (response.status === 401) {
+                    // 🔑 Access token expired mid-batch — refresh once (the
+                    // api.ts helper handles rotation) and retry this item.
+                    const refreshed = await refreshTokens();
+                    if (!refreshed) {
+                        console.warn('Sync aborted: cannot refresh expired token.');
+                        break;
+                    }
+
+                    const refreshedToken = await SecureStore.getItemAsync('access_token');
+                    if (!refreshedToken) {
+                        console.warn('Sync aborted: token missing after refresh.');
+                        break;
+                    }
+                    token = refreshedToken;
+
+                    response = await postCheckIn(item);
+
+                    if (response.status === 401) {
+                        console.warn('Sync aborted: still unauthorized after refresh.');
+                        break;
+                    }
+                }
 
                 // Safely parse JSON, fallback to empty object if it fails
                 const data = await response.json().catch(() => ({}));
@@ -133,34 +174,38 @@ export const syncPendingCheckIns = async (): Promise<void> => {
                         identifier: item.guest_identifier,
                         message: serverMessage,
                     });
-                } else if (response.status === 401) {
-                    // 🔑 UNAUTHORIZED - Token expired. Abort sync entirely.
-                    console.warn('Sync aborted: Unauthorized (401). Token may be expired.');
-                    // Optional: You can import triggerForceLogout here to kick them to login
+                } else if (isTransientStatus(response.status)) {
+                    // ⏳ TEMPORARY FAILURE (outside hours, throttled, server error)
+                    // Keep the row queued and stop this batch — the next sync
+                    // (connectivity change, app foreground, new login) retries.
+                    const serverMessage = data.message || data.detail || `Server unavailable (${response.status})`;
+                    emit({
+                        type: 'sync_error',
+                        identifier: item.guest_identifier,
+                        message: `${serverMessage} Will retry automatically.`,
+                    });
                     break;
                 } else {
-                    // ❌ PERMANENT ERROR (400 Bad Request, 403, 500, etc.)
-                    // Mark as conflict so it is REMOVED from the pending queue and doesn't block future syncs.
+                    // ❌ PERMANENT ERROR (400 Bad Request, 404, 410, 422, etc.)
+                    // The server rejected this payload/guest, so retrying can
+                    // never succeed: mark it as a conflict and move on.
                     const serverMessage = data.message || data.detail || `Failed: ${response.status}`;
                     await markCheckInConflict(item.id, serverMessage);
 
                     emit({
-                        type: 'sync_conflict', // Treat permanent errors as conflicts to clear the queue
+                        type: 'sync_conflict',
                         identifier: item.guest_identifier,
                         message: serverMessage,
                     });
-
-                    // ✅ Use 'continue' instead of 'break' so the loop moves on to the NEXT guest!
-                    continue;
                 }
-            } catch (networkError: any) {
+            } catch {
                 // 🌐 TRUE NETWORK ERROR (No internet, DNS failure, server unreachable)
                 emit({
                     type: 'sync_error',
                     identifier: item.guest_identifier,
                     message: 'Network error. Will retry when connection returns.',
                 });
-                // ✅ Break on network errors, leave in queue to try again later
+                // Leave in queue, stop the batch until connectivity returns.
                 break;
             }
 
@@ -169,20 +214,23 @@ export const syncPendingCheckIns = async (): Promise<void> => {
             // Small delay between syncs to avoid overwhelming the server
             if (i < pending.length - 1) {
                 await new Promise((resolve) => setTimeout(resolve, 600));
-                // each
             }
         }
     } catch (error) {
         console.error('Sync error:', error);
     } finally {
         isSyncing = false;
-        emit({ type: 'sync_complete' });
-        await notifyPendingCount();
+        if (started) {
+            emit({ type: 'sync_complete' });
+            await notifyPendingCount();
+        }
     }
 };
 
-export const triggerSync = () => {
-    if (!isSyncing) {
-        syncPendingCheckIns();
-    }
+export const triggerSync = (): void => {
+    if (isSyncing) return;
+
+    syncPendingCheckIns().catch((error) => {
+        console.error('Sync trigger failed:', error);
+    });
 };

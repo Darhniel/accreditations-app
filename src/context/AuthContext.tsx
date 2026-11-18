@@ -4,6 +4,7 @@ import {
 import * as SecureStore from 'expo-secure-store';
 import { User } from '@/types';
 import { setForceLogoutCallback } from '@/services/authEvents';
+import { setCurrentUserId } from '@/services/current-user';
 
 type AuthContextValue = {
     user: User | null;
@@ -35,7 +36,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 const raw = await SecureStore.getItemAsync('user');
 
                 if (alive && token && raw) {
-                    setUser(JSON.parse(raw));
+                    const restored = JSON.parse(raw);
+                    // Keep the offline queue scoped to the restored account.
+                    setCurrentUserId(typeof restored?.id === 'number' ? restored.id : null);
+                    setUser(restored);
+                } else {
+                    setCurrentUserId(null);
                 }
             } catch (error) {
                 console.warn('Session restore failed:', error);
@@ -53,6 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await SecureStore.setItemAsync('access_token', payload.access);
         await SecureStore.setItemAsync('refresh_token', payload.refresh);
         await SecureStore.setItemAsync('user', JSON.stringify(payload.user));
+        setCurrentUserId(payload.user.id);
 
         setUser(payload.user); // ✅ root guard now learns the user is authenticated
         console.log('Restored user:', JSON.stringify(payload.user));
@@ -64,6 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             SecureStore.deleteItemAsync('refresh_token'),
             SecureStore.deleteItemAsync('user'),
         ]);
+        // Queued scans stay in SQLite under the previous user's id so they are
+        // replayed after that same account signs back in — never under a
+        // different account's token.
+        setCurrentUserId(null);
         setUser(null);
     }, []);
 

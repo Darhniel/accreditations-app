@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Pressable, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, Alert, useWindowDimensions } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import NetInfo from '@react-native-community/netinfo';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { checkInGuest } from '@/services/api';
 import { queueCheckIn, getPendingCount } from '@/services/database';
 
@@ -13,6 +15,11 @@ export default function ScannerScreen() {
     const [permission, requestPermission] = useCameraPermissions();
     const [isProcessing, setIsProcessing] = useState(false);
     const [isOnline, setIsOnline] = useState(true);
+    const { width, height } = useWindowDimensions();
+    const insets = useSafeAreaInsets();
+    // Keep the scan frame usable on an iPhone SE, in landscape/multi-window,
+    // and from growing huge on tablets.
+    const frameSize = Math.max(180, Math.min(320, width * 0.68, height * 0.5));
 
     useEffect(() => {
         const unsubscribe = NetInfo.addEventListener(state => {
@@ -82,8 +89,8 @@ export default function ScannerScreen() {
                 errorMessage = 'This QR code is not registered for this event.';
             } else if (errorMessage.includes('Already checked in')) {
                 errorMessage = 'This guest has already been checked in today.';
-            } else if (errorMessage.includes('outside allowed hours')) {
-                errorMessage = 'Check-ins are not allowed at this time.';
+            } else if (errorMessage.includes('only allowed between')) {
+                errorMessage = 'Check-ins are not allowed at this time. Check your accreditation hours.';
             }
 
             router.replace({
@@ -101,12 +108,19 @@ export default function ScannerScreen() {
         }
     };
 
+
     if (!permission) {
-        return <View style={styles.container}><Text>Requesting camera permission...</Text></View>;
+        return (
+            <View style={[styles.container, styles.permissionScreen]}>
+                <StatusBar style="light" />
+                <Text style={styles.permissionText}>Requesting camera permission...</Text>
+            </View>
+        );
     }
     if (!permission.granted) {
         return (
-            <View style={[styles.container, { justifyContent: "center" }]}>
+            <View style={[styles.container, styles.permissionScreen]}>
+                <StatusBar style="light" />
                 <Text style={styles.errorText}>Camera access required</Text>
                 <Pressable onPress={requestPermission} style={styles.button}>
                     <Text style={styles.buttonText}>Grant Permission</Text>
@@ -117,6 +131,7 @@ export default function ScannerScreen() {
 
     return (
         <View style={styles.container}>
+            <StatusBar style="light" />
             <CameraView
                 style={StyleSheet.absoluteFill}
                 facing="back"
@@ -124,14 +139,15 @@ export default function ScannerScreen() {
             />
 
             {/* Overlay */}
+
             <View style={styles.overlay} pointerEvents="box-none">
                 {!isOnline && (
-                    <View style={styles.offlineIndicator}>
+                    <View style={[styles.offlineIndicator, { top: insets.top + 12 }]}>
                         <Text style={styles.offlineText}>📴 Offline — Scans will sync later</Text>
                     </View>
                 )}
                 {/* Crosshair */}
-                <View style={styles.crosshairBox}>
+                <View style={[styles.crosshairBox, { width: frameSize, height: frameSize }]}>
                     <View style={[styles.corner, styles.cornerTL]} />
                     <View style={[styles.corner, styles.cornerTR]} />
                     <View style={[styles.corner, styles.cornerBL]} />
@@ -149,7 +165,9 @@ export default function ScannerScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
-    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
+    permissionScreen: { justifyContent: 'center', alignItems: 'center', padding: 24 },
+    permissionText: { color: '#FFF', fontSize: 16, textAlign: 'center' },
+    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'center', alignItems: 'center' },
     offlineIndicator: { position: 'absolute', top: 60, left: 20, right: 20, backgroundColor: 'rgba(245, 158, 11, 0.9)', padding: 12, borderRadius: 12 },
     offlineText: { color: '#FFF', fontSize: 13, fontWeight: '600', textAlign: 'center' },
     crosshairBox: { width: 260, height: 260, position: 'relative' },
