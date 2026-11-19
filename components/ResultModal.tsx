@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Animated, Easing } from 'react-native';
 import { GuestSummary } from '@/types';
 
@@ -13,8 +13,8 @@ export default function ResultModal({ success, message, guest, onClose }: Result
   const isSuccess = success === 'true';
   const isQueued = success === 'queued';
 
-  const scaleAnim = useRef(new Animated.Value(0.9)).current;
-  const opacityAnim = useRef(new Animated.Value(0)).current;
+  const [scaleAnim] = useState(() => new Animated.Value(0.9));
+  const [opacityAnim] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     Animated.parallel([
@@ -25,7 +25,7 @@ export default function ResultModal({ success, message, guest, onClose }: Result
         toValue: 1, duration: 200, easing: Easing.bezier(0.16, 1, 0.3, 1), useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [opacityAnim, scaleAnim]);
 
   const getCardStyle = () => {
     if (isQueued) return styles.cardQueued;

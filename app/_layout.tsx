@@ -1,19 +1,9 @@
-import { Slot, Stack, useRouter, useSegments } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { Slot, useRouter, useSegments } from 'expo-router';
+import { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
-import * as Sentry from '@sentry/react-native';
 
-// Only activate Sentry when report-crash source tracking is configured for the build.
-const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
-if (SENTRY_DSN) {
-  Sentry.init({
-    dsn: SENTRY_DSN,
-    tracesSampleRate: 0.1,
-    environment: __DEV__ ? 'development' : 'production',
-  });
-}
 
 SplashScreen.preventAutoHideAsync()
 
@@ -21,7 +11,6 @@ function AuthGate() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  console.log("Segments: ", segments)
 
   useEffect(() => {
     if (isLoading) return;

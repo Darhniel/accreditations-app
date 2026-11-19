@@ -9,9 +9,18 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "vip.accredit.app",
-      "supportsTablet": true,
       "config": {
         "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSExceptionDomains": {
+            "localhost": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        }
       }
     },
     "android": {
@@ -21,7 +30,10 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "output": "static",
@@ -47,13 +59,23 @@
       ],
       "expo-secure-store",
       "expo-sqlite",
-      "@sentry/react-native",
       "expo-status-bar",
       "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "fdc73fe4-6cb5-4c96-9123-9c4f0682c95a"
+      }
+    },
+    "owner": "darhniel"
   }
 }

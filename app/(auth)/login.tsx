@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image, KeyboardAvoidingView, Platform, ScrollView, Pressable } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Image, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { api } from '../../src/services/api';
 import { useAuth } from '@/context/AuthContext';
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
 
 export default function LoginScreen() {
     const [email, setEmail] = useState('');

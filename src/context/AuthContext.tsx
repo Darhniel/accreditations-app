@@ -62,7 +62,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setCurrentUserId(payload.user.id);
 
         setUser(payload.user); // ✅ root guard now learns the user is authenticated
-        console.log('Restored user:', JSON.stringify(payload.user));
     }, []);
 
     const signOut = useCallback(async () => {
@@ -95,7 +94,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const raw = await SecureStore.getItemAsync('user');
         const next: User | null = raw ? { ...JSON.parse(raw), first_login: false } : null;
         
-        console.log("Complete Password Change Log: \n", next)
         if (next) {
             await SecureStore.setItemAsync('user', JSON.stringify(next));
         }

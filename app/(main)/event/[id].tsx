@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, Alert, Animated, Easing, RefreshControl, Platform } from 'react-native';
+import { View, Text, TextInput, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, Alert, RefreshControl, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { searchGuests, checkInGuest, getActivityLog, api } from '@/services/api';
@@ -52,6 +52,97 @@ export default function CheckInScreen() {
 
     const autoResultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // ==========================================
+    // AUTO-DISMISS RESULT MODAL
+    // ==========================================
+    useEffect(() => {
+        if (autoResult) {
+            if (autoResultTimer.current) clearTimeout(autoResultTimer.current);
+            autoResultTimer.current = setTimeout(() => {
+                setAutoResult(null);
+            }, 2500); // Auto-dismiss after 2.5 seconds
+        }
+        return () => {
+            if (autoResultTimer.current) clearTimeout(autoResultTimer.current);
+        };
+    }, [autoResult]);
+
+    // useEffect(() => {
+
+    //     setOnConflictCallback((message, guestIdentifier) => {
+    //         Alert.alert(
+    //             '⚠️ Check-In Conflict',
+    //             `${guestIdentifier}: ${message}\n\nThis check-in was already processed by another ambassador.`,
+    //             [{ text: 'OK' }]
+    //         );
+    //     })
+
+    //     setOnPendingCountChangeCallback((count) => {
+    //         setPendingCount(count)
+    //     })
+
+    //     return () => {
+    //         setOnConflictCallback(null)
+    //         setOnPendingCountChangeCallback(null)
+    //     }
+    // }, []);
+
+    // ==========================================
+    // NETWORK LISTENER
+    // ==========================================
+
+    // Connectivity-driven sync lives in useSyncManager (main layout) so it
+    // also runs after login and on app foreground, not only on this screen.
+    useEffect(() => {
+        const unsubscribe = NetInfo.addEventListener((state) => {
+            setIsOnline(state.isConnected ?? false);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const updatePendingCount = useCallback(async () => {
+        const count = await getPendingCount(eventId);
+        setPendingCount(count);
+    }, [eventId]);
+
+    const fetchActivityLog = useCallback(async () => {
+        try {
+            const data = await getActivityLog(eventId);
+            setActivityLog(data);
+        } catch (error) {
+            console.error('Failed to fetch activity log', error);
+        }
+    }, [eventId]);
+
+    const loadEventData = useCallback(async () => {
+        // Offline: everything the screen needs (locations are remembered from
+        // the last online visit, guest search falls back to the SQLite cache,
+        // activity log keeps its last fetch) — skip the failing network calls.
+        if (!isOnline) return;
+
+        try {
+            const event = await api(`/events/${eventId}/`);
+            setLocations(event.locations || []);
+            if (event.locations && event.locations.length === 1) {
+                setSelectedLocation(event.locations[0]);
+            }
+
+            // Guest cache is best-effort: a SQLite hiccup here must not fail
+            // the screen — the backend load itself already succeeded.
+            try {
+                const guests = await api(`/events/${eventId}/guests/`);
+                await cacheGuestList(eventId, guests);
+            } catch (cacheError) {
+                console.warn('Guest cache update failed:', cacheError);
+            }
+
+            await fetchActivityLog();
+        } catch (error) {
+            console.error('Failed to load event data', error);
+            Alert.alert('Error', 'Failed to load event data. Please check your connection.');
+        }
+    }, [eventId, isOnline, fetchActivityLog]);
 
     useEffect(() => {
         const unsubscribe = subscribeToSync((event: SyncEvent) => {
@@ -110,117 +201,14 @@ export default function CheckInScreen() {
         return () => {
             unsubscribe();
         };
-    }, []);
-
-    // ==========================================
-    // AUTO-DISMISS RESULT MODAL
-    // ==========================================
-    useEffect(() => {
-        if (autoResult) {
-            if (autoResultTimer.current) clearTimeout(autoResultTimer.current);
-            autoResultTimer.current = setTimeout(() => {
-                setAutoResult(null);
-            }, 2500); // Auto-dismiss after 2.5 seconds
-        }
-        return () => {
-            if (autoResultTimer.current) clearTimeout(autoResultTimer.current);
-        };
-    }, [autoResult]);
+    }, [fetchActivityLog]);
 
     useFocusEffect(
         useCallback(() => {
             loadEventData();
             updatePendingCount();
-        }, [eventId, isOnline])
+        }, [loadEventData, updatePendingCount])
     );
-
-    // useEffect(() => {
-
-    //     setOnConflictCallback((message, guestIdentifier) => {
-    //         Alert.alert(
-    //             '⚠️ Check-In Conflict',
-    //             `${guestIdentifier}: ${message}\n\nThis check-in was already processed by another ambassador.`,
-    //             [{ text: 'OK' }]
-    //         );
-    //     })
-
-    //     setOnPendingCountChangeCallback((count) => {
-    //         setPendingCount(count)
-    //     })
-
-    //     return () => {
-    //         setOnConflictCallback(null)
-    //         setOnPendingCountChangeCallback(null)
-    //     }
-    // }, []);
-
-    // ==========================================
-    // NETWORK LISTENER
-    // ==========================================
-
-    // Connectivity-driven sync lives in useSyncManager (main layout) so it
-    // also runs after login and on app foreground, not only on this screen.
-    useEffect(() => {
-        const unsubscribe = NetInfo.addEventListener((state) => {
-            setIsOnline(state.isConnected ?? false);
-        });
-        return () => unsubscribe();
-    }, []);
-
-    const updatePendingCount = async () => {
-        const count = await getPendingCount(eventId);
-        setPendingCount(count);
-    };
-
-    const loadEventData = async () => {
-        // Offline: everything the screen needs (locations are remembered from
-        // the last online visit, guest search falls back to the SQLite cache,
-        // activity log keeps its last fetch) — skip the failing network calls.
-        if (!isOnline) return;
-
-        try {
-            const event = await api(`/events/${eventId}/`);
-            setLocations(event.locations || []);
-            if (event.locations && event.locations.length === 1) {
-                setSelectedLocation(event.locations[0]);
-            }
-
-            // Guest cache is best-effort: a SQLite hiccup here must not fail
-            // the screen — the backend load itself already succeeded.
-            try {
-                const guests = await api(`/events/${eventId}/guests/`);
-                await cacheGuestList(eventId, guests);
-            } catch (cacheError) {
-                console.warn('Guest cache update failed:', cacheError);
-            }
-
-            await fetchActivityLog();
-        } catch (e) {
-            console.error('Failed to load event data', e);
-            Alert.alert('Error', 'Failed to load event data. Please check your connection.');
-        }
-    };
-
-    const fetchLocations = async () => {
-        try {
-            const event = await api(`/events/${eventId}/`);
-            setLocations(event.locations || []);
-            if (event.locations && event.locations.length === 1) {
-                setSelectedLocation(event.locations[0]);
-            }
-        } catch (e) {
-            console.error('Failed to fetch event details', e);
-        }
-    };
-
-    const fetchActivityLog = async () => {
-        try {
-            const data = await getActivityLog(eventId);
-            setActivityLog(data);
-        } catch (e) {
-            console.error('Failed to fetch activity log', e);
-        }
-    };
 
     const handleRefresh = async () => {
         if (!isOnline) return;
@@ -240,10 +228,7 @@ export default function CheckInScreen() {
     // Debounced Search
     useEffect(() => {
         if (searchTimer.current) clearTimeout(searchTimer.current);
-        if (searchQuery.trim().length < 3) {
-            setSearchResults([]);
-            return;
-        }
+        if (searchQuery.trim().length < 3) return;
         searchTimer.current = setTimeout(async () => {
             setIsSearching(true);
             try {
@@ -263,7 +248,7 @@ export default function CheckInScreen() {
         return () => {
             if (searchTimer.current) clearTimeout(searchTimer.current);
         };
-    }, [searchQuery, isOnline]);
+    }, [searchQuery, isOnline, eventId]);
 
     const handleCheckIn = async (identifier: string) => {
         if (!identifier.trim() || isProcessing) return;
@@ -290,7 +275,7 @@ export default function CheckInScreen() {
                         eventId: id,
                     }
                 });
-            } catch (e) {
+            } catch {
                 Alert.alert('Error', 'Failed to queue check-in');
             } finally {
                 setIsProcessing(false);
@@ -339,6 +324,13 @@ export default function CheckInScreen() {
         } finally {
             setIsProcessing(false);
             setSearchQuery('');
+            setSearchResults([]);
+        }
+    };
+
+    const handleSearchChange = (text: string) => {
+        setSearchQuery(text);
+        if (text.trim().length < 3) {
             setSearchResults([]);
         }
     };
@@ -433,7 +425,7 @@ export default function CheckInScreen() {
                                     style={styles.searchInput}
                                     placeholder={isOnline ? "Scan QR or type guest name..." : "Search cached guests..."}
                                     value={searchQuery}
-                                    onChangeText={setSearchQuery}
+                                    onChangeText={handleSearchChange}
                                     autoCapitalize="words"
                                     returnKeyType="search"
                                     onSubmitEditing={() => searchQuery.trim().length >= 3 && handleCheckIn(searchQuery)}

@@ -9,6 +9,7 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.6:80
 
 export { API_BASE_URL };
 
+console.log('API_BASE_URL:', API_BASE_URL); // Log the API base URL for debugging purposes
 /**
  * Single-flight token refresh: when several requests expire at once they all
  * await one refresh call instead of racing to mint new tokens.

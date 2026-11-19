@@ -19,7 +19,7 @@ export default function ChangePasswordScreen() {
         setLoading(true);
 
         try {
-            const data = await api('/auth/change-password/', {
+            await api('/auth/change-password/', {
                 method: 'PUT',
                 body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
             });

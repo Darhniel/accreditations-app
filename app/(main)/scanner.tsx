@@ -7,7 +7,7 @@ import * as Haptics from 'expo-haptics';
 import NetInfo from '@react-native-community/netinfo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { checkInGuest } from '@/services/api';
-import { queueCheckIn, getPendingCount } from '@/services/database';
+import { queueCheckIn } from '@/services/database';
 
 export default function ScannerScreen() {
     const { eventId, locationId } = useLocalSearchParams<{ eventId: string; locationId: string }>();
@@ -51,7 +51,7 @@ export default function ScannerScreen() {
                         eventId,
                     }
                 });
-            } catch (e) {
+            } catch {
                 Alert.alert('Error', 'Failed to queue scan');
             } finally {
                 setIsProcessing(false);

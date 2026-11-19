@@ -17,20 +17,26 @@ export default function HomeScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    loadEvents();
-  }, []);
+    let active = true;
 
-  const loadEvents = async () => {
-    try {
-      const data = await api('/events/');
-      setEvents(data);
-    } catch (error: any) {
-      Alert.alert('Error', 'Failed to load events. Please check your connection.');
-      console.error('Failed to load events', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    (async () => {
+      try {
+        const data = await api('/events/');
+        if (active) setEvents(data);
+      } catch (error: any) {
+        if (active) {
+          Alert.alert('Error', 'Failed to load events. Please check your connection.');
+          console.error('Failed to load events', error);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);

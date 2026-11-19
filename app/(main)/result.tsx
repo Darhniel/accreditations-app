@@ -1,15 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Animated, Easing } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { GuestSummary } from '@/types';
 
 export default function ResultScreen() {
-    const { success, message, guest, eventId } = useLocalSearchParams<{
+    const { success, message, guest } = useLocalSearchParams<{
         success: string;
         message: string;
         guest: string;
-        eventId: string
     }>();
     const router = useRouter();
 
@@ -17,15 +16,15 @@ export default function ResultScreen() {
     const isQueued = success === 'queued';
     const guestData: GuestSummary | null = guest !== 'null' ? JSON.parse(guest) : null;
 
-    const scaleAnim = useRef(new Animated.Value(0.9)).current;
-    const opacityAnim = useRef(new Animated.Value(0)).current;
+    const [scaleAnim] = useState(() => new Animated.Value(0.9));
+    const [opacityAnim] = useState(() => new Animated.Value(0));
 
     useEffect(() => {
         Animated.parallel([
             Animated.timing(opacityAnim, { toValue: 1, duration: 200, easing: Easing.out(Easing.ease), useNativeDriver: true }),
             Animated.timing(scaleAnim, { toValue: 1, duration: 200, easing: Easing.bezier(0.16, 1, 0.3, 1), useNativeDriver: true }),
         ]).start();
-    }, []);
+    }, [opacityAnim, scaleAnim]);
 
     const handleDone = () => {
         router.back()
